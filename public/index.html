@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Luxor PMS</title>
+<style>
+*{box-sizing:border-box}body{margin:0;font:15px system-ui,sans-serif;background:#f4f5f7;color:#1c2330}
+nav{width:200px;background:#1c2330;color:#fff;position:fixed;inset:0 auto 0 0;padding:16px 0}
+nav h1{font-size:18px;margin:0 16px 16px}nav a{display:block;padding:10px 16px;color:#cdd3df;cursor:pointer}
+nav a.on,nav a:hover{background:#2d3748;color:#fff}main{margin-left:200px;padding:24px;max-width:1100px}
+.card{background:#fff;border-radius:8px;padding:16px;margin-bottom:16px;box-shadow:0 1px 3px #0001}
+table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #e5e7eb}
+input,select,button{font:inherit;padding:6px 8px;margin:2px}button{background:#2563eb;color:#fff;border:0;border-radius:4px;cursor:pointer}
+button.sec{background:#64748b}button.red{background:#dc2626}.kpi{display:inline-block;min-width:150px;margin:0 12px 8px 0}
+.kpi b{display:block;font-size:24px}#msg{position:fixed;right:16px;top:16px;padding:10px 14px;border-radius:6px;display:none;color:#fff}
+#login{max-width:300px;margin:12vh auto}.hide{display:none}
+</style></head><body>
+<div id="msg"></div>
+<div id="login" class="card"><h2>Luxor PMS</h2>
+<input id="u" placeholder="Usuario"><input id="p" type="password" placeholder="Contraseña"><button id="go">Ingresar</button></div>
+<div id="app" class="hide"><nav><h1>Luxor</h1><div id="menu"></div><a id="out">Salir</a></nav><main id="main"></main></div>
+<script>
+let T = localStorage.t, ROL = localStorage.r;
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const money = n => 'S/ ' + Number(n ?? 0).toFixed(2);
+function msg(t, ok = true) { const m = $('#msg'); m.textContent = t; m.style.background = ok ? '#16a34a' : '#dc2626'; m.style.display = 'block'; setTimeout(() => m.style.display = 'none', 3500); }
+async function api(m, p, b) {
+  const r = await fetch('/api/' + p, { method: m, headers: { 'content-type': 'application/json', authorization: 'Bearer ' + T }, body: b ? JSON.stringify(b) : undefined });
+  const d = r.status === 204 ? null : await r.json();
+  if (r.status === 401 && p !== 'login') { logout(true); throw new Error('Sesión expirada'); }
+  if (!r.ok) { msg(d.error, false); throw new Error(d.error); }
+  return d;
+}
+const table = (cols, rows) => `<table><tr>${cols.map(c => `<th>${esc(c[0])}</th>`).join('')}</tr>${rows.map(r => `<tr>${cols.map(c => `<td>${c[1](r)}</td>`).join('')}</tr>`).join('')}</table>`;
+const form = o => Object.fromEntries(Object.keys(o).map(k => [k, $('#' + k).value]));
+
+const VISTAS = {
+  async Tablero() {
+    const e = await api('GET', 'estadisticas');
+    return `<div class="card"><h2>Tablero</h2>
+      <div class="kpi">Ocupadas<b>${e.ocupadas}/${e.habitaciones}</b></div><div class="kpi">Ocupación<b>${e.ocupacion}%</b></div>
+      <div class="kpi">Entradas hoy<b>${e.entradas_hoy}</b></div>
+      ${e.dinero_acumulado !== undefined ? `<div class="kpi">Dinero acumulado<b>${money(e.dinero_acumulado)}</b></div><div class="kpi">Cuentas pendientes<b>${money(e.cuentas_pendientes)}</b></div>` : ''}</div>`;
+  },
+  async Huéspedes() {
+    const hs = await api('GET', 'huespedes');
+    return `<div class="card"><h2>Huéspedes</h2>
+      <input id="nombres" placeholder="Nombres"><input id="documento" placeholder="Documento"><input id="procedencia" placeholder="Procedencia"><input id="contacto" placeholder="Contacto">
+      <button onclick="crear('huespedes',['nombres','documento','procedencia','contacto'])">Registrar</button>
+      <input id="busca" placeholder="Buscar por documento" oninput="buscar(this.value)"><div id="lista">${tablaH(hs)}</div></div><div id="hist"></div>`;
+  },
+  async Habitaciones() {
+    const hs = await api('GET', 'habitaciones');
+    return `<div class="card"><h2>Habitaciones</h2>${ROL === 'administrador' ? `<input id="numero" placeholder="N°"><select id="tipo"><option>matrimonial<option>doble<option>triple<option>familiar</select><input id="precio" type="number" placeholder="Precio"><button onclick="crear('habitaciones',['numero','tipo','precio'])">Agregar</button>` : ''}
+      ${table([['N°', r => esc(r.numero)], ['Tipo', r => esc(r.tipo)], ['Precio', r => money(r.precio)], ['Estado', r => esc(r.estado)],
+        ['', r => ROL === 'administrador' && r.estado !== 'Ocupada' ? `<button class="sec" onclick="estadoHab(${r.id},'${r.estado === 'Mantenimiento' ? 'Disponible' : 'Mantenimiento'}')">${r.estado === 'Mantenimiento' ? 'Habilitar' : 'Mantenimiento'}</button>` : '']], hs)}</div>`;
+  },
+  async Reservas() {
+    const [rs, hs, hb] = await Promise.all([api('GET', 'reservas'), api('GET', 'huespedes'), api('GET', 'habitaciones')]);
+    const nh = id => esc(hs.find(h => h.id === id)?.nombres), nb = id => esc(hb.find(h => h.id === id)?.numero);
+    return `<div class="card"><h2>Nueva reserva</h2>
+      <select id="huesped_id">${hs.map(h => `<option value="${h.id}">${esc(h.nombres)} (${esc(h.documento)})</option>`).join('')}</select>
+      <select id="habitacion_id">${hb.map(h => `<option value="${h.id}">${esc(h.numero)} ${esc(h.tipo)} ${money(h.precio)}</option>`).join('')}</select>
+      <input id="entrada" type="date"><input id="salida" type="date"><input id="num_huespedes" type="number" min="1" value="1" title="N° huéspedes">
+      <select id="tipo_estadia"><option>noche<option>horas</select><select id="origen"><option>directo<option>booking<option>airbnb</select>
+      <button onclick="crear('reservas',['huesped_id','habitacion_id','entrada','salida','num_huespedes','tipo_estadia','origen'])">Reservar</button></div>
+      <div class="card"><h2>Reservas</h2>${table([['#', r => r.id], ['Huésped', r => nh(r.huesped_id)], ['Hab.', r => nb(r.habitacion_id)], ['Fechas', r => `${esc(r.entrada)} → ${esc(r.salida)}`],
+        ['Estado', r => esc(r.estado)], ['Total', r => money(r.total)], ['Saldo', r => money(r.saldo)], ['Acciones', r => acciones(r)]], rs)}</div>`;
+  },
+  async Reportes() {
+    const hoy = new Date().toISOString().slice(0, 10), s = await api('GET', 'reportes/saldos');
+    return `<div class="card"><h2>Cuentas con saldo pendiente</h2>${table([['Reserva', r => '#' + r.id], ['Total', r => money(r.total)], ['Pagado', r => money(r.pagado)], ['Saldo', r => money(r.saldo)]], s)}</div>
+      <div class="card"><h2>Reporte financiero</h2><input id="desde" type="date" value="${hoy}"><input id="hasta" type="date" value="${hoy}"><button onclick="financiero()">Generar</button><div id="fin"></div></div>`;
+  },
+  async Usuarios() {
+    const us = await api('GET', 'usuarios'), b = await api('GET', 'bitacora');
+    return `<div class="card"><h2>Usuarios y roles</h2><input id="nombre" placeholder="Nombre"><input id="usuario" placeholder="Usuario"><input id="password" type="password" placeholder="Contraseña (8+)">
+      <select id="rol"><option>recepcionista<option>gerente<option>administrador</select><button onclick="crear('usuarios',['nombre','usuario','password','rol'])">Crear</button>
+      ${table([['Usuario', r => esc(r.usuario)], ['Nombre', r => esc(r.nombre)], ['Rol', r => esc(r.rol)], ['', r => `<button class="red" onclick="borrar('usuarios',${r.id})">Eliminar</button>`]], us)}</div>
+      <div class="card"><h2>Bitácora</h2>${table([['Fecha', r => esc(r.fecha)], ['Usuario', r => esc(r.usuario)], ['Acción', r => esc(r.accion)], ['Detalle', r => esc(r.detalle)]], b)}</div>`;
+  },
+};
+const tablaH = hs => table([['Nombres', r => esc(r.nombres)], ['Documento', r => esc(r.documento)], ['Procedencia', r => esc(r.procedencia)], ['Contacto', r => esc(r.contacto)], ['', r => `<button class="sec" onclick="historial(${r.id})">Historial</button>`]], hs);
+const acciones = r => ({
+  Pendiente: `<button onclick="act('reservas/${r.id}/confirmar')">Confirmar</button><button class="red" onclick="act('reservas/${r.id}/cancelar')">Cancelar</button>`,
+  Confirmada: `<button onclick="act('checkin/${r.id}')">Check-in</button><button class="red" onclick="act('reservas/${r.id}/cancelar')">Cancelar</button>`,
+  Concluida: '', Cancelada: '' }[r.estado]) + (r.estado === 'Confirmada' ? `<button class="sec" onclick="act('checkout/${r.id}')">Check-out</button>` : '') + (r.estado !== 'Cancelada' ? `<button class="sec" onclick="pagar(${r.id})">Pago</button>` : '');
+const vista = async n => { document.querySelectorAll('#menu a').forEach(a => a.classList.toggle('on', a.textContent === n)); $('#main').innerHTML = await VISTAS[n](); };
+const refrescar = () => vista(document.querySelector('#menu a.on').textContent);
+async function crear(ruta, campos) { await api('POST', ruta, form(Object.fromEntries(campos.map(c => [c, 1])))); msg('Guardado'); refrescar(); }
+async function act(ruta) { const r = await api('POST', ruta); msg(r.aviso || 'Listo', !r.aviso); refrescar(); }
+async function borrar(ruta, id) { if (confirm('¿Eliminar?')) { await api('DELETE', `${ruta}/${id}`); refrescar(); } }
+async function estadoHab(id, estado) { await api('PUT', `habitaciones/${id}/estado`, { estado }); refrescar(); }
+async function buscar(v) { $('#lista').innerHTML = tablaH(await api('GET', 'huespedes?documento=' + encodeURIComponent(v))); }
+async function historial(id) {
+  const h = await api('GET', `huespedes/${id}/historial`);
+  $('#hist').innerHTML = `<div class="card"><h3>Historial (3 años)</h3>${table([['Hab.', r => esc(r.numero)], ['Fechas', r => `${esc(r.entrada)} → ${esc(r.salida)}`], ['Estado', r => esc(r.estado)]], h)}</div>`;
+}
+async function pagar(id) {
+  const monto = prompt('Monto (S/):'); if (!monto) return;
+  const medio = prompt('Medio: efectivo, transferencia o yape', 'efectivo'); if (!medio) return;
+  const d = { monto, medio };
+  if (medio !== 'efectivo') { d.banco = prompt('Banco'); d.fecha_operacion = prompt('Fecha operación (AAAA-MM-DD)'); d.nro_operacion = prompt('N° operación'); }
+  await api('POST', `pagos/reserva/${id}`, d); msg('Pago registrado'); refrescar();
+}
+async function financiero() {
+  const r = await api('GET', `reportes/financiero?desde=${$('#desde').value}&hasta=${$('#hasta').value}`);
+  $('#fin').innerHTML = table([['Medio', x => esc(x.medio)], ['Pagos', x => x.n], ['Total', x => money(x.total)]], r.porMedio) + `<p><b>Total: ${money(r.total)}</b></p>`;
+}
+function entrar() {
+  $('#login').classList.add('hide'); $('#app').classList.remove('hide');
+  const v = ['Tablero', 'Huéspedes', 'Habitaciones', 'Reservas'];
+  if (ROL !== 'recepcionista') v.push('Reportes'); if (ROL === 'administrador') v.push('Usuarios');
+  $('#menu').innerHTML = v.map(n => `<a onclick="vista('${n}')">${n}</a>`).join(''); vista('Tablero');
+}
+function logout(silencioso) { if (!silencioso) fetch('/api/logout', { method: 'POST', headers: { authorization: 'Bearer ' + T } }); localStorage.clear(); T = ROL = null; $('#app').classList.add('hide'); $('#login').classList.remove('hide'); }
+$('#go').onclick = async () => { const r = await api('POST', 'login', { usuario: $('#u').value, password: $('#p').value }); T = localStorage.t = r.token; ROL = localStorage.r = r.rol; entrar(); };
+$('#out').onclick = () => logout();
+if (T) entrar();
+</script></body></html>

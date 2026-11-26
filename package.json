@@ -1,0 +1,12 @@
+{
+  "name": "das-pre",
+  "version": "0.1.0",
+  "description": "Prototipo simple de un PMS hotelero (monolito modular en capas) para el curso Diseño y Arquitectura de Software",
+  "type": "module",
+  "engines": { "node": ">=22.5" },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test \"test/*.test.js\""
+  },
+  "license": "MIT"
+}
